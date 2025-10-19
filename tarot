@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>タロット一枚引き – 管理／閲覧 分離版（管理に意味欄追加）</title>
+  <style>
+    :root {
+      --bg: #faf7f2; --ink:#222; --muted:#666; --accent:#7f5bff; --card:#fff; --shadow:0 10px 30px rgba(0,0,0,.10);
+      --r:18px;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;background:radial-gradient(1200px 800px at 70% -10%, #fff 0%, #f7f2ff 45%, #f6efe7 100%), var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Sans","Noto Sans JP","Yu Gothic","Helvetica Neue",Arial,sans-serif}
+    header{padding:20px;text-align:center}
+    h1{margin:0;font-size:26px;letter-spacing:.02em}
+    .sub{color:var(--muted);margin-top:6px}
+    main{max-width:1100px;margin:0 auto;padding:0 18px 30px}
+    .topbar{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:10px 0 18px}
+    .btn{appearance:none;border:none;border-radius:12px;padding:10px 16px;font-weight:700;cursor:pointer;background:linear-gradient(180deg,#a588ff,var(--accent));color:#fff;box-shadow:0 6px 18px rgba(127,91,255,.35)}
+    .btn.secondary{background:#ece7ff;color:#5537d6;box-shadow:none}
+    .btn.ghost{background:transparent;color:#5537d6;border:1px solid #d8d1ff}
+    .panel{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:16px;margin:10px 0}
+    .filebox{border:2px dashed #d0c6ff;border-radius:var(--r);padding:16px;background:#fbfaff;text-align:center;color:#5a3ec8}
+    .filebox input[type=file]{display:none}
+    .filebox .label{display:inline-block;padding:10px 14px;border-radius:10px;background:#efeaff;cursor:pointer;font-weight:700}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    @media(max-width:900px){.grid{grid-template-columns:1fr}}
+    .row{display:grid;grid-template-columns:60px 1fr;gap:12px;align-items:start;margin:10px 0;padding:10px;border:1px dashed #eee;border-radius:12px}
+    .row img{width:60px;height:90px;object-fit:cover;border-radius:6px;box-shadow:0 4px 10px rgba(0,0,0,.12)}
+    .row .col{display:grid;gap:8px}
+    .row input[type=text]{padding:8px 10px;border:1px solid #ddd;border-radius:10px}
+    textarea{width:100%;min-height:72px;padding:8px 10px;border:1px solid #ddd;border-radius:10px}
+    .mini{font-size:12px;color:#777}
+    .viewer{display:grid;grid-template-columns:420px;justify-content:center}
+    .card{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:14px;min-height:540px;display:grid;place-items:center}
+    .card img{max-width:100%;max-height:500px;border-radius:12px;box-shadow:0 12px 22px rgba(0,0,0,.12);transition:transform .4s ease}
+    .title{font-size:18px;margin:8px 0 2px;text-align:center}
+    .note{color:var(--muted);font-size:12px;text-align:center;margin-bottom:6px}
+    .meaning{background:#fbfaff;border:1px solid #e8e1ff;border-radius:12px;padding:12px;margin-top:10px}
+    .badge{display:inline-block;background:#efeaff;color:#5a3ec8;border-radius:999px;font-size:12px;padding:3px 8px;margin-left:6px}
+    .danger{color:#b00020}
+    .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  </style>
+</head>
+<body>
+<header>
+  <h1>タロット一枚引き – 管理／閲覧 分離版</h1>
+  <div class="sub" id="modeNote">読み込み中…</div>
+  <div class="topbar">
+    <button class="btn secondary" id="openAdmin">管理画面を開く</button>
+    <button class="btn secondary" id="openViewer">閲覧画面を開く（ユーザー用）</button>
+  </div>
+</header>
+<main id="app"></main>
+
+<script>
+/* =========================
+   IndexedDB ラッパ
+========================= */
+const DB_NAME="TarotDB_v1";
+const STORE_CARDS="cards";
+const STORE_META="meta";
+function openDB(){
+  return new Promise((resolve,reject)=>{
+    const req=indexedDB.open(DB_NAME,1);
+    req.onupgradeneeded=e=>{
+      const db=e.target.result;
+      if(!db.objectStoreNames.contains(STORE_CARDS)){
+        db.createObjectStore(STORE_CARDS,{keyPath:"id"});
+      }
+      if(!db.objectStoreNames.contains(STORE_META)){
+        db.createObjectStore(STORE_META,{keyPath:"key"});
+      }
+    };
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error);
+  });
+}
+async function idbGetAll(store){
+  const db=await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(store,"readonly");
+    const st=tx.objectStore(store);
+    const req=st.getAll();
+    req.onsuccess=()=>resolve(req.result||[]);
+    req.onerror=()=>reject(req.error);
+  });
+}
+async function idbPut(store,value){
+  const db=await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(store,"readwrite");
+    tx.oncomplete=()=>resolve(true);
+    tx.onerror=()=>reject(tx.error);
+    tx.objectStore(store).put(value);
+  });
+}
+async function idbDeleteAll(store){
+  const db=await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(store,"readwrite");
+    tx.oncomplete=()=>resolve(true);
+    tx.onerror=()=>reject(tx.error);
+    tx.objectStore(store).clear();
+  });
+}
+async function idbGet(store,key){
+  const db=await openDB();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction(store,"readonly");
+    const st=tx.objectStore(store);
+    const req=st.get(key);
+    req.onsuccess=()=>resolve(req.result||null);
+    req.onerror=()=>reject(req.error);
+  });
+}
+
+/* =========================
+   共通関数
+========================= */
+const qs=(s,p=document)=>p.querySelector(s);
+const el=(tag,attrs={},children=[])=>{
+  const n=document.createElement(tag);
+  for(const [k,v] of Object.entries(attrs)){
+    if(k==="class") n.className=v;
+    else if(k==="html") n.innerHTML=v;
+    else if(k.startsWith("on") && typeof v==="function") n.addEventListener(k.slice(2),v);
+    else n.setAttribute(k,v);
+  }
+  for(const c of [].concat(children)) n.appendChild(typeof c==="string"?document.createTextNode(c):c);
+  return n;
+};
+function escapeHtml(str){return String(str).replace(/[&<>"']/g,s=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[s]))}
+
+/* =========================
+   モード判定
+========================= */
+const params=new URLSearchParams(location.search);
+const MODE=params.get("mode")==="admin"?"admin":"view";
+qs("#modeNote").textContent = MODE==="admin"
+  ? "現在：管理画面（カード登録・編集）。このファイルをもう1つ開いて ?mode=view で閲覧画面に。"
+  : "現在：閲覧画面（ユーザー向け）。?mode=admin で管理画面に切替可能。";
+qs("#openAdmin").addEventListener("click",()=>{
+  const url=new URL(location.href); url.searchParams.set("mode","admin"); window.open(url,"_blank");
+});
+qs("#openViewer").addEventListener("click",()=>{
+  const url=new URL(location.href); url.searchParams.set("mode","view"); window.open(url,"_blank");
+});
+
+/* =========================
+   管理画面
+========================= */
+async function renderAdmin(){
+  const app=qs("#app"); app.innerHTML="";
+  const meta=(await idbGet(STORE_META,"settings"))?.value || {allowReverse:true};
+  const sortById = a=>a.sort((x,y)=>x.id-y.id);
+
+  // 1) 登録・設定
+  const uploadPanel=el("section",{class:"panel"},[
+    el("div",{class:"filebox",id:"dropzone"},[
+      el("input",{id:"file",type:"file",accept:"image/*",multiple:true}),
+      el("label",{for:"file",class:"label"},["画像（22枚）を選択 or ドラッグ＆ドロップ"]),
+      el("div",{class:"sub"},"画像はIndexedDBに保存され、閲覧画面と共有されます。")
+    ]),
+    el("div",{class:"toolbar",style:"margin-top:10px"},[
+      el("label",{},[ el("input",{type:"checkbox",id:"allowReverse", ...(meta.allowReverse?{checked:""}:{})}), " 逆位置を出す（50%）" ]),
+      el("button",{class:"btn secondary",id:"saveSettings"},"設定を保存"),
+      el("button",{class:"btn ghost",id:"collapseAll"},"全て閉じる"),
+      el("button",{class:"btn ghost",id:"expandAll"},"全て開く")
+    ]),
+    el("div",{class:"note"},"※ ローカル保存：同じファイル（同じパス）を?mode=admin / ?mode=viewで開くと共有されます。")
+  ]);
+  app.appendChild(uploadPanel);
+
+  // 2) カード一覧 + 編集（サムネ横に常設で表示）
+  const listPanel=el("section",{class:"panel"},[
+    el("h3",{},["カード管理"]),
+    el("div",{class:"mini"},"各カードの「タイトル」「正位置の意味」「逆位置の意味」をサムネイル画像の右側に常時表示。編集は自動保存。"),
+    el("div",{id:"list"}),
+    el("div",{style:"display:flex;gap:8px;margin-top:12px"},[
+      el("button",{class:"btn ghost",id:"exportBtn"},"バックアップ（JSON書き出し）"),
+      el("label",{class:"btn ghost"},["バックアップ読み込み", el("input",{id:"importFile",type:"file",accept:"application/json",style:"display:none"})]),
+      el("button",{class:"btn secondary danger",id:"clearAll"},"すべて削除")
+    ])
+  ]);
+  app.appendChild(listPanel);
+
+  async function renderList(){
+    const wrap=el("div");
+    const items=sortById(await idbGetAll(STORE_CARDS));
+    items.forEach(card=>{
+      const row=el("div",{class:"row"});
+      const url=URL.createObjectURL(card.imageBlob);
+      row.appendChild(el("img",{src:url,alt:card.name||""}));
+
+      const col=el("div",{class:"col"});
+      // 名称
+      col.appendChild(el("input",{type:"text",value:card.name||"",placeholder:"カード名（例：星）",oninput: async (e)=>{
+        card.name=e.target.value; await idbPut(STORE_CARDS,card);
+      }}));
+      // 正位置
+      const upTA=el("textarea",{placeholder:"正位置の意味（例：希望・癒し・インスピレーション など）",oninput: async (e)=>{
+        card.meaningUp=e.target.value; await idbPut(STORE_CARDS,card);
+      }},[card.meaningUp||""]);
+      col.appendChild(upTA);
+      // 逆位置
+      const revTA=el("textarea",{placeholder:"逆位置の意味（例：失望・自己不信・現実逃避 など）",oninput: async (e)=>{
+        card.meaningRev=e.target.value; await idbPut(STORE_CARDS,card);
+      }},[card.meaningRev||""]);
+      col.appendChild(revTA);
+
+      // 下部ツールバー
+      const tl=el("div",{class:"toolbar"},[
+        el("span",{class:"mini"},[`ID: ${card.id}`]),
+        el("button",{class:"btn ghost",onclick:()=>previewCard(card)},"閲覧画面でテスト表示")
+      ]);
+      col.appendChild(tl);
+
+      row.appendChild(col);
+      wrap.appendChild(row);
+      row.addEventListener("DOMNodeRemoved",()=>URL.revokeObjectURL(url),{once:true});
+    });
+    qs("#list").innerHTML="";
+    qs("#list").appendChild(wrap);
+  }
+  await renderList();
+
+  // 画像読込
+  function readFiles(files){
+    const arr=[...files].filter(f=>f.type.startsWith("image/"));
+    if(arr.length===0) return;
+    idbGetAll(STORE_CARDS).then(async existing=>{
+      const maxId = existing.reduce((m,c)=>Math.max(m,c.id), -1);
+      for(let i=0;i<arr.length;i++){
+        const id=maxId+1+i;
+        const file=arr[i];
+        const blob=file;
+        const defaultNames=["愚者","魔術師","女教皇","女帝","皇帝","教皇","恋人","戦車","力","隠者","運命の輪","正義","吊られた男","死神","節制","悪魔","塔","星","月","太陽","審判","世界"];
+        const name = defaultNames[id] || `Card ${id}`;
+        await idbPut(STORE_CARDS,{id,name,meaningUp:"",meaningRev:"",imageBlob:blob});
+      }
+      renderList();
+    });
+  }
+  qs("#file").addEventListener("change",e=>readFiles(e.target.files));
+  const drop=qs("#dropzone");
+  ["dragenter","dragover"].forEach(evt=>drop.addEventListener(evt,e=>{e.preventDefault();drop.style.borderColor="#b39cff"}));
+  ["dragleave","drop"].forEach(evt=>drop.addEventListener(evt,e=>{e.preventDefault();drop.style.borderColor="#d0c6ff"}));
+  drop.addEventListener("drop",e=>{ if(e.dataTransfer?.files) readFiles(e.dataTransfer.files) });
+
+  qs("#saveSettings").addEventListener("click",async()=>{
+    const allow=qs("#allowReverse").checked;
+    await idbPut(STORE_META,{key:"settings",value:{allowReverse:allow}});
+    alert("設定を保存しました");
+  });
+
+  qs("#clearAll").addEventListener("click",async()=>{
+    if(!confirm("本当にすべて削除しますか？（元に戻せません）")) return;
+    await idbDeleteAll(STORE_CARDS); await idbDeleteAll(STORE_META);
+    renderAdmin();
+  });
+
+  qs("#exportBtn").addEventListener("click", async()=>{
+    const items=await idbGetAll(STORE_CARDS);
+    const withData=await Promise.all(items.map(async c=>{
+      const b64=await blobToDataURL(c.imageBlob);
+      return {...c,imageDataURL:b64,imageBlob:undefined};
+    }));
+    const metaData=(await idbGet(STORE_META,"settings"))?.value || {};
+    const payload={cards:withData, meta:metaData, ts:Date.now()};
+    const blob=new Blob([JSON.stringify(payload)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=el("a",{href:url,download:"tarot_backup.json"}); document.body.appendChild(a); a.click();
+    setTimeout(()=>{URL.revokeObjectURL(url); a.remove();},100);
+  });
+  qs("#importFile").addEventListener("change", async e=>{
+    const file=e.target.files?.[0]; if(!file) return;
+    const text=await file.text();
+    const data=JSON.parse(text);
+    await idbDeleteAll(STORE_CARDS);
+    if(data?.cards){
+      for(const c of data.cards){
+        const blob=await dataURLToBlob(c.imageDataURL);
+        await idbPut(STORE_CARDS,{id:c.id,name:c.name,meaningUp:c.meaningUp||"",meaningRev:c.meaningRev||"",imageBlob:blob});
+      }
+    }
+    if(data?.meta){
+      await idbPut(STORE_META,{key:"settings",value:data.meta});
+    }
+    alert("バックアップを復元しました。");
+    renderAdmin();
+  });
+
+  function blobToDataURL(blob){
+    return new Promise((resolve,reject)=>{
+      const fr=new FileReader(); fr.onload=()=>resolve(fr.result); fr.onerror=reject; fr.readAsDataURL(blob);
+    });
+  }
+  function dataURLToBlob(dataURL){
+    return fetch(dataURL).then(res=>res.blob());
+  }
+
+  function previewCard(card){
+    const url=new URL(location.href); url.searchParams.set("mode","view");
+    // 閲覧画面側で直後にこのIDを見せるため、metaに一時保存
+    idbPut(STORE_META,{key:"previewId",value:card.id}).then(()=>{
+      window.open(url,"_blank");
+    });
+  }
+
+  // 展開/折りたたみ（textareaの高さ操作）
+  qs("#collapseAll").addEventListener("click",()=>{
+    document.querySelectorAll("textarea").forEach(t=>t.style.minHeight="40px");
+  });
+  qs("#expandAll").addEventListener("click",()=>{
+    document.querySelectorAll("textarea").forEach(t=>t.style.minHeight="120px");
+  });
+}
+
+/* =========================
+   閲覧（ユーザー）画面
+========================= */
+async function renderViewer(){
+  const app=qs("#app"); app.innerHTML="";
+  const meta=(await idbGet(STORE_META,"settings"))?.value || {allowReverse:true};
+  const cards=await idbGetAll(STORE_CARDS);
+  if(cards.length===0){
+    app.appendChild(el("section",{class:"panel"},[
+      el("h3",{},["カード未登録"]),
+      el("p",{},["管理画面（?mode=admin）でカード画像を登録してください。"])
+    ]));
+    return;
+  }
+  let lastId=null;
+  const drawBtn=el("button",{class:"btn",id:"draw"},"一枚引く");
+  const image=el("img",{alt:"カード"});
+  const title=el("div",{class:"title"},"—");
+  const note = el("div",{class:"note"},"—");
+  const meaning=el("div",{class:"meaning",id:"meaning"},"—");
+
+  const viewer=el("section",{class:"panel viewer"},[
+    el("div",{class:"card"},[image]),
+    el("div",{style:"text-align:center;margin-top:10px"},[drawBtn,title,note,meaning])
+  ]);
+  app.appendChild(viewer);
+
+  // 管理からのプレビュー指定があれば優先
+  const previewMeta = await idbGet(STORE_META,"previewId");
+  if(previewMeta){
+    const pick = cards.find(c=>c.id===previewMeta.value) || cards[0];
+    await idbPut(STORE_META,{key:"previewId",value:null});
+    showCard(pick, Math.random()<0.5 && !!meta.allowReverse);
+  } else {
+    draw();
+  }
+
+  function draw(){
+    let pick;
+    for(let tries=0; tries<5; tries++){
+      pick=cards[Math.floor(Math.random()*cards.length)];
+      if(pick?.id!==lastId) break;
+    }
+    lastId=pick.id;
+    const reversed = !!meta.allowReverse && Math.random()<0.5;
+    showCard(pick, reversed);
+  }
+
+  function showCard(pick, reversed){
+    const url=URL.createObjectURL(pick.imageBlob);
+    image.src=url; image.style.transform=reversed?"rotate(180deg)":"rotate(0deg)";
+    title.innerHTML = escapeHtml(pick.name||"—") + (reversed? ' <span class="badge">逆位置</span>':' <span class="badge">正位置</span>');
+    note.textContent = `ID：${pick.id}`;
+    meaning.textContent = reversed ? (pick.meaningRev||"—") : (pick.meaningUp||"—");
+    image.addEventListener("load",()=> URL.revokeObjectURL(url), {once:true});
+  }
+
+  drawBtn.addEventListener("click",draw);
+}
+
+/* =========================
+   起動
+========================= */
+const params2=new URLSearchParams(location.search);
+const MODE2=params2.get("mode")==="admin"?"admin":"view";
+if(MODE2==="admin"){ renderAdmin(); } else { renderViewer(); }
+</script>
+</body>
+</html>
